@@ -2,11 +2,20 @@
 
 # Press Shift+F10 to execute it or replace it with your code.
 # Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
+import nltk
+import requests
+import json
 import csv
+import re
+import googleplaces
 
+from googleplaces import GooglePlaces, types, lang
 from nltk import word_tokenize, pos_tag
 from nltk.chat.util import Chat
 from spellchecker import SpellChecker
+
+_API_KEY = ''
+google_places = GooglePlaces(_API_KEY)
 
 abbreviations = {
     "$": " dollar ",
@@ -254,6 +263,19 @@ chat_responsies = [
 ]
 
 
+def search_places_by_coordinate(self, location, radius, types):
+    endpoint_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+    params = {
+        'location': location,
+        'radius': radius,
+        'types': types,
+        'key': self.apiKey
+    }
+    res = requests.get(endpoint_url, params=params)
+    results = json.loads(res.content)
+    return results
+
+
 def print_hi(name):
     # Use a breakpoint in the code line below to debug your script.
     print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
@@ -277,17 +299,21 @@ def _lookup_words(input_text):
     return new_text
 
 
+# dosnt work
 def _containesStations(input_text):
     words = input_text.split()
     new_words = []
     with open('station_codes (06-08-2020).csv', 'rt') as stationList:
         reader = csv.reader(stationList)
         locatoins = []
+        stationList = csv.slit
+
         for row in reader:
             for item in row:
                 if item.lower() in input_text.lower():
                     locatoins.append(item)
         return locatoins
+
 
 def _spellCheck(input_word):
     spell = SpellChecker()
@@ -300,7 +326,23 @@ def _genoratePosTags(input_text):
 
 
 def _FindDateInText(input_text):
-    return
+    timeFramewords = ["tomorrow", "yesterday", "fortnight", "monday", "tuesday", "wednesday", "thursday", "friday",
+                      "saturday", "sunday", "week", "month"]
+
+    dates = []
+    # extreamly likely to be date and right
+    dates = dates + re.findall(r'\d+\S\d+\S\d+', input_text)
+
+    # hgihly likely to be date
+    dates = dates + re.findall(r'[a-z]\w+\s\d+', input_text)
+
+    # possilbe relevent dates
+    tokens = word_tokenize(input_text)
+    for token in tokens:
+        if token in timeFramewords:
+            dates = dates + [token]
+
+    return dates
 
 
 # testing perpopuse
@@ -310,16 +352,66 @@ def myfirstbot():
     chat.converse()
 
 
+def _findSations(input_text):
+    stations = []
+    possiblePlaces = _findtags(input_text)
+    for places in possiblePlaces:
+        location = places + ', England'
+        try:
+            response = google_places.nearby_search(location=location, keyword='TrainStation', radius=10000,
+                                                   types=[types.TYPE_TRAIN_STATION])
+            if response.places[0] != None:
+                stations = stations + [response.places[0]]
+        except:
+            pass
+    return stations
+
+
+# https://drumcoder.co.uk/blog/2013/dec/23/finding-proper-nouns-nltk/
+def _findtags(input_text):
+    cosecutive = False
+    nouns = []
+    for word, pos in nltk.pos_tag(nltk.word_tokenize(input_text)):
+        if pos == 'NNP' or pos == 'NNPS':
+            if cosecutive:
+                nouns[-1] = nouns[-1] + " " + word
+            else:
+                nouns.append(word)
+            cosecutive = True
+        else:
+            cosecutive = False
+    return nouns
+
+
+def _messagerecived(input_text):
+    keyInformation = []
+    keyInformation = keyInformation + _FindDateInText(input_text)
+    keyInformation = keyInformation + _findSations(input_text)
+    return keyInformation
+
+
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    print_hi('PyCharm')
+    # response = google_places.nearby_search(location='norwich, England', keyword='TrainStation', radius=20000,
+    #                                        types=[types.TYPE_TRAIN_STATION])
+
+    satations = _messagerecived("i want a train to Great Yarmouth on the 12/12/2020 from Norwich and to return Jan 4th")
+    print(satations)
+
+    #    for place in response.places:
+    #       print(place.name)
+    #      print(place.geo_location)
+    #     print(place.place_id)
+
+print_hi('PyCharm')
 
 #    nltk.download("all")
 
 # Sample code to remove noisy words from a text
-print(_genoratePosTags("London"))
 # myfirstbot()
 
+nouns = _findtags("London Ringwood dad mum chair we are going to go very fun word  not sure monitor")
+print(nouns)
 
 print(_lookup_words("RT this is a retweeted tweet by u Shivam Bansal"))
 print(_remove_noise("this is a sample text?"))
@@ -327,6 +419,11 @@ print(_spellCheck("instell"))
 print(_genoratePosTags("I am going to fetch my cat from the shelter later and book it to the accounts"))
 print(_genoratePosTags("five seven 6 9 July"))
 
-print(_containesStations("Bromley Cross"))
-print(_containesStations(" d  Abbey Wood"))
+print(_FindDateInText(
+    "i want a train station tickent from 15/1/20 to 15-2-25   or maybe Jan 2nd  kjklfjkl 3   yesterday or tomorrow"))
+
+# print(_containesStations("Bromley Cross"))
+# print(_containesStations(" d  Abbey Wood"))
+
+
 # See PyCharm help at https://www.jetbrains.com/help/pycharm/
