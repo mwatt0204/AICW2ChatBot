@@ -8,11 +8,19 @@ import json
 import csv
 import re
 import googleplaces
+import enum
+import fuzzywuzzy
 
 from googleplaces import GooglePlaces, types, lang
 from nltk import word_tokenize, pos_tag
 from nltk.chat.util import Chat
 from spellchecker import SpellChecker
+from fuzzywuzzy import fuzz
+
+_messageCount = 0
+_expectedResponse = None
+_percentThresholdRatio = 95
+_percentThresholdPartial = 90
 
 _API_KEY = ''
 google_places = GooglePlaces(_API_KEY)
@@ -247,7 +255,58 @@ abbreviations = {
     "zzz": "sleeping bored and tired"
 }
 
-noise_list = ["is", "a", "this", "..."]
+months = {
+    "jan": "01m",
+    "january": "01m",
+    "feb": "02m",
+    "february": "02m",
+    "march": "03m",
+    "april": "04m",
+    "apr": "04m",
+    "may": "05m",
+    "jun": "06m",
+    "june": "06m",
+    "july": "07m",
+    "jul": "07m",
+    "august": "08m",
+    "aug": "08m",
+    "september": "09m",
+    "sep": "09m",
+    "sept": "09m",
+    "october": "10m",
+    "oct": "10m",
+    "november": "11m",
+    "nov": "11m",
+    "december": "12m",
+    "dec": "dec",
+}
+
+
+numberCovserisonsForChoiceSelection = {
+    "first": "1",
+    "second": "2",
+    "third": "3",
+    "forth": "4",
+    "first one": "1",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+}
+
+class Journy:
+    messagecounter = 0
+    startlocation = None
+    destinatinon = None
+    depaturetdate = None
+    returnNeeded = None
+    returndate = None
+    choices = []
+
+
+_journy = Journy()
+
+noise_list = ["is", "a", "this", "i", "me"]
 
 words = ["item", "cat", "dog"]
 
@@ -283,7 +342,7 @@ def print_hi(name):
 
 def _remove_noise(input_text):
     words = input_text.split()
-    noise_free_words = [word for word in words if word not in noise_list]
+    noise_free_words = [word for word in words if word.lower() not in noise_list]
     noise_free_text = " ".join(noise_free_words)
     return noise_free_text
 
@@ -299,20 +358,15 @@ def _lookup_words(input_text):
     return new_text
 
 
-# dosnt work
-def _containesStations(input_text):
+def _lookup_months(input_text):
     words = input_text.split()
     new_words = []
-    with open('station_codes (06-08-2020).csv', 'rt') as stationList:
-        reader = csv.reader(stationList)
-        locatoins = []
-        stationList = csv.slit
-
-        for row in reader:
-            for item in row:
-                if item.lower() in input_text.lower():
-                    locatoins.append(item)
-        return locatoins
+    for word in words:
+        if word.lower() in months:
+            word = months[word.lower()]
+        new_words.append(word)
+        new_text = " ".join(new_words)
+    return new_text
 
 
 def _spellCheck(input_word):
@@ -326,20 +380,19 @@ def _genoratePosTags(input_text):
 
 
 def _FindDateInText(input_text):
-    timeFramewords = ["tomorrow", "yesterday", "fortnight", "monday", "tuesday", "wednesday", "thursday", "friday",
-                      "saturday", "sunday", "week", "month"]
+    timeFramewords = ["tomorrow", "fortnight", "monday", "tuesday", "wednesday", "thursday", "friday",
+                      "saturday", "sunday", "week", "month", "weekend"]
 
     dates = []
     # extreamly likely to be date and right
-    dates = dates + re.findall(r'\d+\S\d+\S\d+', input_text)
-
+    # dates = dates + re.findall(r'\d+\S\d+\S\d+', input_text)
+    dates = dates + _findtagsCD(input_text)
     # hgihly likely to be date
-    dates = dates + re.findall(r'[a-z]\w+\s\d+', input_text)
 
     # possilbe relevent dates
     tokens = word_tokenize(input_text)
     for token in tokens:
-        if token in timeFramewords:
+        if token.lower() in timeFramewords:
             dates = dates + [token]
 
     return dates
@@ -354,11 +407,11 @@ def myfirstbot():
 
 def _findSations(input_text):
     stations = []
-    possiblePlaces = _findtags(input_text)
+    possiblePlaces = _findtagsNNP(input_text)
     for places in possiblePlaces:
         location = places + ', England'
         try:
-            response = google_places.nearby_search(location=location, keyword='TrainStation', radius=10000,
+            response = google_places.nearby_search(location=location, keyword='', radius=10000,
                                                    types=[types.TYPE_TRAIN_STATION])
             if response.places[0] != None:
                 stations = stations + [response.places[0]]
@@ -368,11 +421,11 @@ def _findSations(input_text):
 
 
 # https://drumcoder.co.uk/blog/2013/dec/23/finding-proper-nouns-nltk/
-def _findtags(input_text):
+def _findtagsNNP(input_text):
     cosecutive = False
     nouns = []
     for word, pos in nltk.pos_tag(nltk.word_tokenize(input_text)):
-        if pos == 'NNP' or pos == 'NNPS':
+        if pos == 'NNP' or pos == 'NNPS' or pos:
             if cosecutive:
                 nouns[-1] = nouns[-1] + " " + word
             else:
@@ -383,47 +436,178 @@ def _findtags(input_text):
     return nouns
 
 
+def _findtagsNouns(input_text):
+    cosecutive = False
+    nouns = []
+    for word, pos in nltk.pos_tag(nltk.word_tokenize(input_text)):
+        if pos == 'NNP' or pos == 'NNPS' or pos == "NN":
+            if cosecutive:
+                nouns[-1] = nouns[-1] + " " + word
+            else:
+                nouns.append(word)
+            cosecutive = True
+        else:
+            cosecutive = False
+    return nouns
+
+
+def _findSations2(input_text):
+    nouns = _findtagsNouns(input_text)
+    # tokens = nltk.word_tokenize(input_text)
+    for noun in nouns:
+        print(noun)
+    return compareNounToStationList(nouns)
+
+
+def compareNounToStationList(nouns):
+    possibalStations = []
+    with open("GB stations.csv") as stationList:
+        reader = csv.reader(stationList)
+        for noun in nouns:
+            stationList.seek(0,0)
+            print(noun)
+            for row in reader:
+                ratio = fuzz.ratio(noun.lower(), row[0].lower())
+                if ratio >= _percentThresholdRatio:
+                    print(noun + "," + row[0] + "," + str(ratio))
+                    possibalStations = possibalStations + [row[0]]
+        print(len(possibalStations))
+        if len(possibalStations) == 0:
+            for noun in nouns:
+                count = 0
+                stationList.seek(0, 0)
+                print(noun)
+                for row in reader:
+                    ratio = fuzz.partial_ratio(noun.lower(), row[0].lower())
+                    if ratio >= _percentThresholdPartial:
+                        count = count + 1
+                        print(noun + "," + row[0] + "," + str(ratio))
+                        possibalStations = possibalStations + [row[0]]
+                if count > 10:
+                    for i in range(count):
+                         del possibalStations[-1]
+
+        return possibalStations
+
+
+def _findtagsCD(input_text):
+    cosecutive = False
+    nouns = []
+    for word, pos in nltk.pos_tag(nltk.word_tokenize(input_text)):
+        if pos == 'CD':
+            if cosecutive:
+                nouns[-1] = nouns[-1] + " " + word
+            else:
+
+                nouns.append(word)
+            cosecutive = True
+        else:
+            cosecutive = False
+    return nouns
+
+
+
+def _extractInformatoin(input_text):
+    #if(len(_journy.choices) > 0):
+     #   lieklychoices = _findtagsCD(input_text)
+    input_text = _lookup_words(input_text)
+    input_text = _lookup_months(input_text)
+    keydates = _FindDateInText(input_text)
+    keylocations = _findSations2(input_text)
+    # keylocations = _findSations(input_text)
+    return keylocations, keydates
+
+
+def _moveConservationFowords():
+    if _journy.destinatinon == None:
+        return "where are you looking to traval to", 0
+    if _journy.startlocation == None:
+        return "could you tell me where you are setting off from", 1
+    if _journy.depaturetdate == None:
+        return "what date are you looking to traval", 2
+    if _journy.returnNeeded == None:
+        return "would you like return", 3
+
+
+def _populateJournyLocatoins(locations):
+    if _expectedResponse == 0:
+        if len(locations) == 1:
+            _journy.destinatinon = locations[0]
+            return True
+    elif _expectedResponse == 1:
+        if len(locations) == 1:
+            _journy.startlocation = locations[0]
+            return True
+    else:
+        return False
+
+
+def _populateJournyDates(dates):
+    if _expectedResponse == 2:
+        if len(dates) == 1:
+            _journy.depaturetdate = dates[0]
+            return True
+    else:
+        return False
+
+
+def _getOptions(locations):
+    if len(locations) < 5:
+        _journy.choices = locations
+        message = "i found " + str(len(locations)) + " liekly mataches did you mean any of these: \n"
+        for i in range(len(locations)):
+            message = message + str(i) + "." + locations[i] + ". \n"
+    else:
+        message = " if you tried to give a locations it might have been a bit vague please try be more persfice and check spellings"
+    return message,
+
+
 def _messagerecived(input_text):
-    keyInformation = []
-    keyInformation = keyInformation + _FindDateInText(input_text)
-    keyInformation = keyInformation + _findSations(input_text)
-    return keyInformation
+    global _messageCount
+    global _expectedResponse
+    _messageCount = _messageCount + 1
+    response = ""
+    input_text = _remove_noise(input_text)
+    locations, dates = _extractInformatoin(input_text)
+    daterecived = False
+    if len(locations) == 1:
+        daterecived = _populateJournyLocatoins(locations)
+    if len(dates) == 1:
+        daterecived = _populateJournyDates(dates)
+    if daterecived or _messageCount == 1:
+        word, _expectedResponse = _moveConservationFowords()
+    elif (len(locations) > 1):
+        word = _getOptions(locations)
+    else:
+        word = "i don't konw hat you mean"
+        temp,_expectedResponse = _moveConservationFowords()
+        word = word + temp
+
+    print("Destination: " + str(_journy.destinatinon))
+    print("StartLocatin: " + str(_journy.startlocation))
+    print("Depaturea Date: " + str(_journy.depaturetdate))
+
+    if _messageCount == 1:
+        response = "Hello my Name is Thomas the train bot: an automated ai chatbot than can help you find train traval times" + "\n" + word
+    else:
+        response = word
+    return response
 
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
+
     # response = google_places.nearby_search(location='norwich, England', keyword='TrainStation', radius=20000,
     #                                        types=[types.TYPE_TRAIN_STATION])
 
-    satations = _messagerecived("i want a train to Great Yarmouth on the 12/12/2020 from Norwich and to return Jan 4th")
-    print(satations)
+    while True:
+        message = str(input())
+        # print(_genoratePosTags(message))
+        # print(_findSations2(message))
+        print(_messagerecived(message))
 
-    #    for place in response.places:
-    #       print(place.name)
-    #      print(place.geo_location)
-    #     print(place.place_id)
-
-print_hi('PyCharm')
-
-#    nltk.download("all")
-
-# Sample code to remove noisy words from a text
-# myfirstbot()
-
-nouns = _findtags("London Ringwood dad mum chair we are going to go very fun word  not sure monitor")
-print(nouns)
-
-print(_lookup_words("RT this is a retweeted tweet by u Shivam Bansal"))
-print(_remove_noise("this is a sample text?"))
-print(_spellCheck("instell"))
-print(_genoratePosTags("I am going to fetch my cat from the shelter later and book it to the accounts"))
-print(_genoratePosTags("five seven 6 9 July"))
-
-print(_FindDateInText(
-    "i want a train station tickent from 15/1/20 to 15-2-25   or maybe Jan 2nd  kjklfjkl 3   yesterday or tomorrow"))
-
-# print(_containesStations("Bromley Cross"))
-# print(_containesStations(" d  Abbey Wood"))
-
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+#   satations = _messagerecived("hello there im looking to book a train Jan")
+#  print(satations)
+#
+#   satations = _messagerecived("tomowrow would be best going to London 12/11/2020  from Norwich")
+#  print(satations)
